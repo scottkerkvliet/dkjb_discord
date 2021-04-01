@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"math/rand"
 	"os"
 	"os/signal"
 	"strings"
@@ -19,6 +20,8 @@ const unsubscribeCommand = "!unsubscribe"
 const factCommand = "!fact"
 const frequencyCommand = "!frequency"
 const imageCommand = "!image"
+const autoCommand = "!auto"
+const gifCommand = "!gif"
 const factMinutes = 3
 const factMinutesFast = 0.5
 const pauseSeconds = 3
@@ -30,27 +33,17 @@ const pause = time.Second * pauseSeconds
 var channelId string
 var ticker *time.Ticker
 var factChannel chan bool
-var facts []string
 var priorityUsers []*discordgo.User
 var fastMode = false
+var auto = true
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	// Load Files
 	openingMessageFile, err := ioutil.ReadFile("messages/opening-message.txt")
 	if err != nil {
 		fmt.Println("Could not read opening-message.txt")
 		return
-	}
-
-	factsFile, err := os.Open("messages/facts.txt")
-	if err != nil {
-		fmt.Println("Could not open facts.txt")
-		return
-	}
-	scanner := bufio.NewScanner(factsFile)
-	scanner.Split(bufio.ScanLines)
-	for scanner.Scan() {
-		facts = append(facts, scanner.Text())
 	}
 
 	channelIdFile, err := ioutil.ReadFile("channelId.txt")
@@ -96,6 +89,9 @@ func main() {
 	commandMessage += fmt.Sprintf("`%v` for a fun Donkey Kong image!\n", imageCommand)
 	commandMessage += fmt.Sprintf("`%v` to change the frequency of automated fact delivery\n", frequencyCommand)
 	commandMessage += fmt.Sprintf("`%v` if you no longer wish to receive DKJB facts\n", unsubscribeCommand)
+	commandMessage += "Commands v2:\n"
+	commandMessage += fmt.Sprintf("`%v` to toggle the automated fact delivery\n", autoCommand)
+	commandMessage += fmt.Sprintf("`%v` to print out a gif\n", gifCommand)
 	bot.ChannelMessageSend(channelId, commandMessage)
 
 	go sendFacts(bot)
@@ -140,6 +136,17 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		triggerDelayedFact()
 	} else if strings.HasPrefix(m.Content, imageCommand) {
 		sendImage(s, m)
+	} else if strings.HasPrefix(m.Content, gifCommand) {
+		sendGif(s, m)
+	} else if strings.HasPrefix(m.Content, autoCommand) {
+		auto = !auto
+		if auto {
+			s.ChannelMessageSend(m.ChannelID, "Automated fact delivery is enabled again!")
+			triggerFact()
+		} else {
+			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("We've disabled automated fact delivery. Type `%v` to re-enable!", autoCommand))
+			ticker.Stop()
+		}
 	}
 }
 
@@ -152,13 +159,23 @@ func mentionEveryone() string {
 }
 
 func sendFacts(s *discordgo.Session) {
-	i := 0
 	for range factChannel {
-		newFact := facts[i]
-		i++
-		if i == len(facts) {
-			i = 0
+		var facts []string
+		factsFile, err := os.Open("messages/facts.txt")
+		if err != nil {
+			fmt.Println("Could not open facts.txt")
+			return
 		}
+		scanner := bufio.NewScanner(factsFile)
+		scanner.Split(bufio.ScanLines)
+		for scanner.Scan() {
+			facts = append(facts, scanner.Text())
+		}
+		factsFile.Close()
+
+		factIndex := rand.Intn(len(facts))
+
+		newFact := facts[factIndex]
 
 		if len(priorityUsers) > 0 {
 			var userList string
@@ -177,16 +194,46 @@ func sendImage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		fmt.Println("Could not open image1.jpg")
 		return
 	}
+	defer imageFile.Close()
 	s.ChannelFileSend(m.ChannelID, "iwanturbigbanana.jpg", imageFile)
 }
 
+func sendGif(s *discordgo.Session, m *discordgo.MessageCreate) {
+	gifDir, err := os.Open("gifs")
+	if err != nil {
+		fmt.Println("Could not open gif directory")
+		return
+	}
+	defer gifDir.Close()
+
+	gifList, err := gifDir.Readdirnames(0)
+	if err != nil {
+		fmt.Println("Could not open gif file names")
+		return
+	}
+
+	gifIndex := rand.Intn(len(gifList))
+	gifFile, err := os.Open(fmt.Sprintf("gifs/%v", gifList[gifIndex]))
+	if err != nil {
+		fmt.Println("Could not open gif")
+		return
+	}
+	defer gifFile.Close()
+
+	s.ChannelFileSend(m.ChannelID, gifList[gifIndex], gifFile)
+}
+
 func triggerFact() {
-	ticker.Reset(getDuration())
+	if auto {
+		ticker.Reset(getDuration())
+	}
 	factChannel <- true
 }
 
 func triggerDelayedFact() {
-	ticker.Reset(getDuration())
+	if auto {
+		ticker.Reset(getDuration())
+	}
 	time.AfterFunc(pause, func() {
 		factChannel <- true
 	})
